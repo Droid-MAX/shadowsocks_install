@@ -19,16 +19,29 @@ echo "# Github: https://github.com/shadowsocks/shadowsocks-go     #"
 echo "#############################################################"
 echo
 
-#Current folder
+# Current folder
 cur_dir=`pwd`
+# Stream Ciphers
+ciphers=(
+aes-256-cfb
+aes-192-cfb
+aes-128-cfb
+aes-256-ctr
+aes-192-ctr
+aes-128-ctr
+chacha20-ietf
+chacha20
+salsa20
+rc4-md5
+)
+# Color
+red='\033[0;31m'
+green='\033[0;32m'
+yellow='\033[0;33m'
+plain='\033[0m'
 
 # Make sure only root can run our script
-rootness(){
-    if [[ $EUID -ne 0 ]]; then
-       echo "Error:This script must be run as root!" 1>&2
-       exit 1
-    fi
-}
+[[ $EUID -ne 0 ]] && echo -e "[${red}Error${plain}] This script must be run as root!" && exit 1
 
 #Check system
 check_sys(){
@@ -41,34 +54,34 @@ check_sys(){
     if [[ -f /etc/redhat-release ]]; then
         release="centos"
         systemPackage="yum"
-    elif cat /etc/issue | grep -q -E -i "debian"; then
+    elif grep -Eqi "debian" /etc/issue; then
         release="debian"
         systemPackage="apt"
-    elif cat /etc/issue | grep -q -E -i "ubuntu"; then
+    elif grep -Eqi "ubuntu" /etc/issue; then
         release="ubuntu"
         systemPackage="apt"
-    elif cat /etc/issue | grep -q -E -i "centos|red hat|redhat"; then
+    elif grep -Eqi "centos|red hat|redhat" /etc/issue; then
         release="centos"
         systemPackage="yum"
-    elif cat /proc/version | grep -q -E -i "debian"; then
+    elif grep -Eqi "debian|raspbian" /proc/version; then
         release="debian"
         systemPackage="apt"
-    elif cat /proc/version | grep -q -E -i "ubuntu"; then
+    elif grep -Eqi "ubuntu" /proc/version; then
         release="ubuntu"
         systemPackage="apt"
-    elif cat /proc/version | grep -q -E -i "centos|red hat|redhat"; then
+    elif grep -Eqi "centos|red hat|redhat" /proc/version; then
         release="centos"
         systemPackage="yum"
     fi
 
-    if [[ ${checkType} == "sysRelease" ]]; then
-        if [ "$value" == "$release" ]; then
+    if [[ "${checkType}" == "sysRelease" ]]; then
+        if [ "${value}" == "${release}" ]; then
             return 0
         else
             return 1
         fi
-    elif [[ ${checkType} == "packageManager" ]]; then
-        if [ "$value" == "$systemPackage" ]; then
+    elif [[ "${checkType}" == "packageManager" ]]; then
+        if [ "${value}" == "${systemPackage}" ]; then
             return 0
         else
             return 1
@@ -125,14 +138,24 @@ get_ip(){
     [ ! -z ${IP} ] && echo ${IP} || echo
 }
 
+get_char(){
+    SAVEDSTTY=`stty -g`
+    stty -echo
+    stty cbreak
+    dd if=/dev/tty bs=1 count=1 2> /dev/null
+    stty -raw
+    stty echo
+    stty $SAVEDSTTY
+}
+
 # Pre-installation settings
 pre_install(){
     if ! check_sys packageManager yum && ! check_sys packageManager apt; then
-        echo "Error: Your OS is not supported. please change OS to CentOS/Debian/Ubuntu and try again."
+        echo -e "$[{red}Error${plain}] Your OS is not supported. please change OS to CentOS/Debian/Ubuntu and try again."
         exit 1
     fi
     # Set shadowsocks-go config password
-    echo "Please input password for shadowsocks-go:"
+    echo "Please enter password for shadowsocks-go:"
     read -p "(Default password: teddysun.com):" shadowsockspwd
     [ -z "${shadowsockspwd}" ] && shadowsockspwd="teddysun.com"
     echo
@@ -143,43 +166,61 @@ pre_install(){
     # Set shadowsocks-go config port
     while true
     do
-    echo -e "Please input port for shadowsocks-go [1-65535]:"
-    read -p "(Default port: 8989):" shadowsocksport
-    [ -z "${shadowsocksport}" ] && shadowsocksport="8989"
-    expr ${shadowsocksport} + 0 &>/dev/null
+    dport=$(shuf -i 9000-19999 -n 1)
+    echo -e "Please enter a port for shadowsocks-go [1-65535]"
+    read -p "(Default port: ${dport}):" shadowsocksport
+    [ -z "${shadowsocksport}" ] && shadowsocksport=${dport}
+    expr ${shadowsocksport} + 1 &>/dev/null
     if [ $? -eq 0 ]; then
-        if [ ${shadowsocksport} -ge 1 ] && [ ${shadowsocksport} -le 65535 ]; then
+        if [ ${shadowsocksport} -ge 1 ] && [ ${shadowsocksport} -le 65535 ] && [ ${shadowsocksport:0:1} != 0 ]; then
             echo
             echo "---------------------------"
             echo "port = ${shadowsocksport}"
             echo "---------------------------"
             echo
             break
-        else
-            echo "Input error, please input correct number"
         fi
-    else
-        echo "Input error, please input correct number"
     fi
+    echo -e "[${red}Error${plain}] Please enter a correct number [1-65535]"
     done
-    get_char(){
-        SAVEDSTTY=`stty -g`
-        stty -echo
-        stty cbreak
-        dd if=/dev/tty bs=1 count=1 2> /dev/null
-        stty -raw
-        stty echo
-        stty $SAVEDSTTY
-    }
+
+    # Set shadowsocks config stream ciphers
+    while true
+    do
+    echo -e "Please select stream cipher for shadowsocks-go:"
+    for ((i=1;i<=${#ciphers[@]};i++ )); do
+        hint="${ciphers[$i-1]}"
+        echo -e "${green}${i}${plain}) ${hint}"
+    done
+    read -p "Which cipher you'd select(Default: ${ciphers[0]}):" pick
+    [ -z "$pick" ] && pick=1
+    expr ${pick} + 1 &>/dev/null
+    if [ $? -ne 0 ]; then
+        echo -e "[${red}Error${plain}] Please enter a number"
+        continue
+    fi
+    if [[ "$pick" -lt 1 || "$pick" -gt ${#ciphers[@]} ]]; then
+        echo -e "[${red}Error${plain}] Please enter a number between 1 and ${#ciphers[@]}"
+        continue
+    fi
+    shadowsockscipher=${ciphers[$pick-1]}
+    echo
+    echo "---------------------------"
+    echo "cipher = ${shadowsockscipher}"
+    echo "---------------------------"
+    echo
+    break
+    done
+
     echo
     echo "Press any key to start...or Press Ctrl+C to cancel"
     char=`get_char`
     #Install necessary dependencies
     if check_sys packageManager yum; then
-        yum install -y wget unzip gzip curl
+        yum install -y wget unzip gzip curl nss
     elif check_sys packageManager apt; then
         apt-get -y update
-        apt-get install -y wget unzip gzip curl
+        apt-get install -y wget unzip gzip curl libnss3
     fi
     echo
 
@@ -189,42 +230,38 @@ pre_install(){
 download_files(){
     cd ${cur_dir}
     if is_64bit; then
-        if ! wget --no-check-certificate -c https://github.com/shadowsocks/shadowsocks-go/releases/download/1.1.5/shadowsocks-server-linux64-1.1.5.gz; then
-            echo "Failed to download shadowsocks-server-linux64-1.1.5.gz"
+        if ! wget --no-check-certificate -c https://dl.lamp.sh/shadowsocks/shadowsocks-server-linux64-1.2.1.gz; then
+            echo -e "[${red}Error${plain}] Failed to download shadowsocks-server-linux64-1.2.1.gz"
             exit 1
         fi
-        gzip -d shadowsocks-server-linux64-1.1.5.gz
-        if [ $? -eq 0 ]; then
-            echo "Decompress shadowsocks-server-linux64-1.1.5.gz success."
-        else
-            echo "Decompress shadowsocks-server-linux64-1.1.5.gz failed! Please check gzip command."
+        gzip -d shadowsocks-server-linux64-1.2.1.gz
+        if [ $? -ne 0 ]; then
+            echo -e "[${red}Error${plain}] Decompress shadowsocks-server-linux64-1.2.1.gz failed"
             exit 1
         fi
-        mv -f shadowsocks-server-linux64-1.1.5 /usr/bin/shadowsocks-server
+        mv -f shadowsocks-server-linux64-1.2.1 /usr/bin/shadowsocks-server
     else
-        if ! wget --no-check-certificate -c https://github.com/shadowsocks/shadowsocks-go/releases/download/1.1.5/shadowsocks-server-linux32-1.1.5.gz; then
-            echo "Failed to download shadowsocks-server-linux32-1.1.5.gz"
+        if ! wget --no-check-certificate -c https://dl.lamp.sh/shadowsocks/shadowsocks-server-linux32-1.2.1.gz; then
+            echo -e "[${red}Error${plain}] Failed to download shadowsocks-server-linux32-1.2.1.gz"
             exit 1
         fi
-        gzip -d shadowsocks-server-linux32-1.1.5.gz
-        if [ $? -eq 0 ]; then
-            echo "Decompress shadowsocks-server-linux32-1.1.5.gz success."
-        else
-            echo "Decompress shadowsocks-server-linux32-1.1.5.gz failed! Please check gzip command."
+        gzip -d shadowsocks-server-linux32-1.2.1.gz
+        if [ $? -ne 0 ]; then
+            echo -e "[${red}Error${plain}] Decompress shadowsocks-server-linux32-1.2.1.gz failed"
             exit 1
         fi
-        mv -f shadowsocks-server-linux32-1.1.5 /usr/bin/shadowsocks-server
+        mv -f shadowsocks-server-linux32-1.2.1 /usr/bin/shadowsocks-server
     fi
 
     # Download start script
     if check_sys packageManager yum; then
         if ! wget --no-check-certificate -O /etc/init.d/shadowsocks https://raw.githubusercontent.com/teddysun/shadowsocks_install/master/shadowsocks-go; then
-            echo "Failed to download shadowsocks-go auto start script!"
+            echo -e "[${red}Error${plain}] Failed to download shadowsocks-go auto start script!"
             exit 1
         fi
     elif check_sys packageManager apt; then
         if ! wget --no-check-certificate -O /etc/init.d/shadowsocks https://raw.githubusercontent.com/teddysun/shadowsocks_install/master/shadowsocks-go-debian; then
-            echo "Failed to download shadowsocks-go auto start script!"
+            echo -e "[${red}Error${plain}] Failed to download shadowsocks-go auto start script!"
             exit 1
         fi
     fi
@@ -241,15 +278,15 @@ config_shadowsocks(){
     "server_port":${shadowsocksport},
     "local_port":1080,
     "password":"${shadowsockspwd}",
-    "method":"aes-256-cfb",
-    "timeout":600
+    "method":"${shadowsockscipher}",
+    "timeout":300
 }
 EOF
 }
 
 # Firewall set
 firewall_set(){
-    echo "firewall set start..."
+    echo -e "[${green}Info${plain}] firewall set start..."
     if centosversion 6; then
         /etc/init.d/iptables status > /dev/null 2>&1
         if [ $? -eq 0 ]; then
@@ -260,10 +297,10 @@ firewall_set(){
                 /etc/init.d/iptables save
                 /etc/init.d/iptables restart
             else
-                echo "port ${shadowsocksport} has been set up."
+                echo -e "[${green}Info${plain}] port ${shadowsocksport} has been set up."
             fi
         else
-            echo "WARNING: iptables looks like shutdown or not installed, please manually set it if necessary."
+            echo -e "[${yellow}Warning${plain}] iptables looks like shutdown or not installed, please manually set it if necessary."
         fi
     elif centosversion 7; then
         systemctl status firewalld > /dev/null 2>&1
@@ -272,25 +309,17 @@ firewall_set(){
             firewall-cmd --permanent --zone=public --add-port=${shadowsocksport}/udp
             firewall-cmd --reload
         else
-            echo "Firewalld looks like not running, try to start..."
-            systemctl start firewalld
-            if [ $? -eq 0 ]; then
-                firewall-cmd --permanent --zone=public --add-port=${shadowsocksport}/tcp
-                firewall-cmd --permanent --zone=public --add-port=${shadowsocksport}/udp
-                firewall-cmd --reload
-            else
-                echo "WARNING: Try to start firewalld failed. please enable port ${shadowsocksport} manually if necessary."
-            fi
+            echo -e "[${yellow}Warning${plain}] firewalld looks like not running or not installed, please enable port ${shadowsocksport} manually if necessary."
         fi
     fi
-    echo "firewall set completed..."
+    echo -e "[${green}Info${plain}] firewall set completed..."
 }
 
 # Install Shadowsocks-go
 install(){
 
-    if [ -s /usr/bin/shadowsocks-server ]; then
-        echo "shadowsocks-go install success!"
+    if [ -f /usr/bin/shadowsocks-server ]; then
+        echo "Shadowsocks-go server install success!"
         chmod +x /usr/bin/shadowsocks-server
         chmod +x /etc/init.d/shadowsocks
 
@@ -302,25 +331,22 @@ install(){
         fi
 
         /etc/init.d/shadowsocks start
-        if [ $? -eq 0 ]; then
-            echo "Shadowsocks-go start success!"
-        else
-            echo "Shadowsocks-go start failed!"
+        if [ $? -ne 0 ]; then
+            echo -e "[${red}Error${plain}] Shadowsocks-go server start failed!"
         fi
     else
         echo
-        echo "Shadowsocks-go install failed!"
+        echo -e "[${red}Error${plain}] Shadowsocks-go server install failed!"
         exit 1
     fi
 
     clear
     echo
-    echo "Congratulations, Shadowsocks-go install completed!"
-    echo -e "Your Server IP: \033[41;37m $(get_ip) \033[0m"
-    echo -e "Your Server Port: \033[41;37m ${shadowsocksport} \033[0m"
-    echo -e "Your Password: \033[41;37m ${shadowsockspwd} \033[0m"
-    echo -e "Your Local Port: \033[41;37m 1080 \033[0m"
-    echo -e "Your Encryption Method: \033[41;37m aes-256-cfb \033[0m"
+    echo -e "Congratulations, Shadowsocks-go server install completed!"
+    echo -e "Your Server IP        : \033[41;37m $(get_ip) \033[0m"
+    echo -e "Your Server Port      : \033[41;37m ${shadowsocksport} \033[0m"
+    echo -e "Your Password         : \033[41;37m ${shadowsockspwd} \033[0m"
+    echo -e "Your Encryption Method: \033[41;37m ${shadowsockscipher} \033[0m"
     echo
     echo "Welcome to visit:https://teddysun.com/392.html"
     echo "Enjoy it!"
@@ -358,7 +384,6 @@ uninstall_shadowsocks_go(){
 
 # Install Shadowsocks-go
 install_shadowsocks_go(){
-    rootness
     disable_selinux
     pre_install
     download_files
@@ -374,10 +399,10 @@ action=$1
 [ -z $1 ] && action=install
 case "$action" in
     install|uninstall)
-    ${action}_shadowsocks_go
-    ;;
+        ${action}_shadowsocks_go
+        ;;
     *)
-    echo "Arguments error! [${action}]"
-    echo "Usage: `basename $0` {install|uninstall}"
-    ;;
+        echo "Arguments error! [${action}]"
+        echo "Usage: `basename $0` [install|uninstall]"
+        ;;
 esac
